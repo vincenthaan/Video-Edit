@@ -11,6 +11,7 @@ from pathlib import Path
 from . import ffmpeg
 from .disfluency import DisfluencyOptions, find_disfluencies
 from .models import Cut, Word
+from .motion import detect_activity
 from .silence import detect_silence
 from .subtitles import SubtitleOptions, build_cues, to_srt
 from .timeline import (
@@ -19,6 +20,7 @@ from .timeline import (
     disfluency_cuts,
     keep_segments,
     merge_cuts,
+    protect_spans,
     silence_cuts,
     snap_keeps,
     word_gap_cuts,
@@ -59,6 +61,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument("--max-word-gap", type=float, default=1.0,
                    help="단어 사이 공백이 이보다 길면 자름 (0=끔)")
     g.add_argument("--no-silence", action="store_true", help="무음 컷 끄기")
+    g.add_argument("--no-motion", action="store_true",
+                   help="화면 변화 무시 (기본은 말이 없어도 화면이 움직이면 자르지 않음)")
+    g.add_argument("--motion-pixels", type=int, default=6, metavar="N",
+                   help="320x180으로 줄인 화면에서 N픽셀 이상 바뀌면 '움직임'으로 봄 (기본 6). "
+                        "카메라 흔들림·노이즈 때문에 무음이 너무 안 잘리면 50~200으로 올리기")
 
     g = p.add_argument_group("버벅임 컷")
     g.add_argument("--no-fillers", action="store_true", help="'어/음' 같은 간투사 컷 끄기")
@@ -88,7 +95,7 @@ def _fmt(sec: float) -> str:
     return f"{int(m)}:{s:04.1f}"
 
 
-def analyze(args: argparse.Namespace, src: Path, outdir: Path, duration: float):
+def analyze(args: argparse.Namespace, src: Path, outdir: Path, duration: float, has_video: bool):
     words_path = outdir / f"{src.stem}.words.json"
     if words_path.exists() and not args.retranscribe:
         print(f"• 저장된 음성 인식 결과 사용: {words_path.name}")
@@ -113,9 +120,18 @@ def analyze(args: argparse.Namespace, src: Path, outdir: Path, duration: float):
     if not args.no_silence:
         print("• 무음 구간 찾는 중")
         spans = detect_silence(str(src), duration, args.silence_db, args.min_silence)
-        cuts += silence_cuts(spans, opts.pad)
+        quiet = silence_cuts(spans, opts.pad)
         if opts.max_word_gap and words:
-            cuts += word_gap_cuts(words, opts.max_word_gap, opts.pad)
+            quiet += word_gap_cuts(words, opts.max_word_gap, opts.pad)
+        if has_video and not args.no_motion and quiet:
+            print("• 화면 변화 분석 중 (말 없이 필기·조작하는 구간 보호)")
+            active = detect_activity(str(src), min_pixels=args.motion_pixels)
+            before = sum(c.duration for c in quiet)
+            quiet = protect_spans(quiet, active, {"silence", "gap"})
+            saved = before - sum(c.duration for c in quiet)
+            if saved > 0:
+                print(f"  화면이 움직여서 살린 무음: {saved:.1f}초")
+        cuts += quiet
 
     dopts = DisfluencyOptions(
         fillers=not args.no_fillers,
@@ -162,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         cuts = merge_cuts([Cut.from_dict(c) for c in data["cuts"]], duration, CutOptions(min_cut=0))
         print(f"• 수정된 컷 목록 사용: {args.cuts} ({len(cuts)}개)")
     else:
-        words, marks, cuts = analyze(args, src, outdir, duration)
+        words, marks, cuts = analyze(args, src, outdir, duration, fps is not None)
         save_cuts_json(cuts_path, src, duration, words, marks, cuts)
 
     keeps = keep_segments(cuts, duration)

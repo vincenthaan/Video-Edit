@@ -131,3 +131,26 @@ def snap_keeps(keeps: list[tuple[float, float]], fps: float) -> list[tuple[float
             snapped.append((s2, e2))
     return snapped
 
+
+
+def protect_spans(cuts: list[Cut], spans: list[tuple[float, float]], reasons: set[str]) -> list[Cut]:
+    """reasons 에 해당하는 컷에서 spans 부분을 빼낸다 (컷이 여러 조각으로 나뉠 수 있음)."""
+    out: list[Cut] = []
+    for c in cuts:
+        if c.reason not in reasons:
+            out.append(c)
+            continue
+        pieces = [(c.start, c.end)]
+        for s, e in spans:
+            nxt = []
+            for a, b in pieces:
+                if e <= a or s >= b:
+                    nxt.append((a, b))
+                    continue
+                if s > a:
+                    nxt.append((a, s))
+                if e < b:
+                    nxt.append((e, b))
+            pieces = nxt
+        out += [Cut(a, b, c.reason) for a, b in pieces if b > a]
+    return out

@@ -131,3 +131,20 @@ def test_cues_split_by_length():
     cues = build_cues(w, set(), TimeMap([(0, 100)]))
     assert all(len(c.text.replace(" ", "")) <= 18 for c in cues)
     assert len(cues) == 2
+
+
+def test_active_spans_joins_and_pads():
+    from autocut.motion import active_spans
+
+    counts = [0, 0, 10, 12, 0, 0, 0, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0]
+    # 5fps: 0.4~0.8 과 1.4~1.6 은 1초 이내라 합쳐지고, 3픽셀짜리는 노이즈로 무시
+    assert flat(active_spans(counts, min_pixels=6, pad=0.3)) == pytest.approx([0.1, 1.9])
+
+
+def test_protect_spans_splits_silence_only():
+    from autocut.timeline import protect_spans
+
+    cuts = [Cut(2.0, 8.0, "silence"), Cut(9.0, 9.5, "filler")]
+    out = protect_spans(cuts, [(3.5, 6.3), (9.0, 9.5)], {"silence", "gap"})
+    assert [(c.start, c.end, c.reason) for c in out] == [
+        (2.0, 3.5, "silence"), (6.3, 8.0, "silence"), (9.0, 9.5, "filler")]
